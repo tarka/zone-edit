@@ -25,6 +25,16 @@ cfg_if! {
         use tokio_rustls::TlsConnector;
         use hyper_util::rt::tokio::TokioIo as HyperIo;
 
+    } else if #[cfg(feature = "monoio")] {
+        use monoio::{
+            io::IntoPollIo,
+            net::TcpStream};
+        use monoio_rustls::TlsConnector;
+        use monoio_compat::{
+            AsyncRead, AsyncWrite, AsyncReadExt, AsyncWriteExt,
+            hyper::MonoioIo as HyperIo
+        };
+
     } else {
         compile_error!("Either smol or tokio feature must be enabled");
     }
@@ -43,6 +53,9 @@ pub fn spawn<T: Send + 'static>(future: impl Future<Output = T> + Send + 'static
 
         } else if #[cfg(feature = "tokio")] {
             tokio::spawn(future);
+
+        } else if #[cfg(feature = "monoio")] {
+            monoio::spawn(future);
         }
     }
 }
@@ -65,7 +78,7 @@ pub async fn request(host: &'static str, req: Request<String>) -> Result<Respons
         .with_root_certificates(cert_store)
         .with_no_client_auth();
     let tlsconn = TlsConnector::from(Arc::new(tlsconf));
-    let tlsstream = tlsconn.connect(tlsdomain, stream).await?;
+    let tlsstream = tlsconn.connect(tlsdomain, stream).await.unwrap();
 
     let (mut sender, conn) = http1::handshake(HyperIo::new(tlsstream)).await?;
 
