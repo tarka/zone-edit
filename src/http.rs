@@ -7,6 +7,7 @@ use http_body_util::BodyExt;
 use hyper::{
     body::{Buf, Incoming}, client::conn::http1, header::{ACCEPT, AUTHORIZATION, CONTENT_TYPE, HOST}, Method, Response, StatusCode, Uri
 };
+use monoio_compat::StreamWrapper;
 use rustls::{ClientConfig, RootCertStore, pki_types::ServerName};
 use serde::{de::DeserializeOwned, Serialize};
 
@@ -21,8 +22,16 @@ cfg_if! {
         use tokio_rustls::TlsConnector;
         use hyper_util::rt::tokio::TokioIo as HyperIo;
 
+    } else if #[cfg(feature = "monoio")] {
+        use monoio::net::TcpStream;
+        use monoio_rustls::TlsConnector;
+        use monoio_compat::{
+//            hyper::MonoioIo as HyperIo
+        };
+        use hyper_util::rt::TokioIo as HyperIo;
+
     } else {
-        compile_error!("Either smol or tokio feature must be enabled");
+        compile_error!("Either monoio, smol, or tokio feature must be enabled");
     }
 }
 
@@ -39,6 +48,8 @@ pub fn spawn<T: Send + 'static>(future: impl Future<Output = T> + Send + 'static
 
         } else if #[cfg(feature = "tokio")] {
             tokio::spawn(future);
+        } else if #[cfg(feature = "monoio")] {
+            monoio::spawn(future);
         }
     }
 }
@@ -75,18 +86,39 @@ where
         rb.body("".to_string())?
     };
 
-    let addr = format!("{host}:443");
-    let stream = TcpStream::connect(addr).await?;
 
     let cert_store = load_system_certs();
-    let tlsdomain = ServerName::try_from(host)?;
-    let tlsconf = ClientConfig::builder()
+
+    // let tlsconf = ClientConfig::builder()
+    //     .with_root_certificates(cert_store)
+    //     .with_no_client_auth();
+
+    // let tlsdomain = ServerName::try_from(host)?;
+    // let tlsconn = TlsConnector::from(Arc::new(tlsconf));
+
+    // let stream = TcpStream::connect((host, 443)).await?;
+    // let stream = monoio_compat::TcpStreamCompat::from(StreamWrapper::new(stream));
+
+    // let tlsstream = tlsconn.connect(tlsdomain, stream).await
+    //     .map_err(|e| Error::HttpError(e.to_string()))?;
+    // let io = HyperIo::new(tlsstream);
+
+    // let (mut sender, conn) = http1::handshake(io).await?;
+
+    let config = rustls::ClientConfig::builder()
         .with_root_certificates(cert_store)
         .with_no_client_auth();
-    let tlsconn = TlsConnector::from(Arc::new(tlsconf));
-    let tlsstream = tlsconn.connect(tlsdomain, stream).await?;
 
-    let (mut sender, conn) = http1::handshake(HyperIo::new(tlsstream)).await?;
+    let tls_connector = TlsConnector::from(Arc::new(config));
+
+    let stream = TcpStream::connect((host, 443)).await?;
+    let stream = monoio_compat::TcpStreamCompat::from(StreamWrapper::new(stream));
+    let server_name = ServerName::try_from(host)?;
+    let stream = tls_connector.connect(server_name.to_owned(), stream).await.unwrap();
+    let io = HyperIo::new(stream);
+
+    let (mut sender, conn) = hyper::client::conn::http1::handshake(io).await.unwrap();
+
 
     spawn(async move {
         if let Err(e) = conn.await {
