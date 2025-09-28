@@ -47,9 +47,14 @@ test_gandi = []
 test_dnsimple = []
 
 [dev-dependencies]
+acme-micro = "0.13.0"
+anyhow = "1.0.100"
 cfg-if = "1.0.3"
 macro_rules_attribute = "0.2.2"
 random-string = "1.1.0"
 smol-macros = "0.1.1"
 test-log = { version = "0.2.18", features = ["trace"] }
 tracing-test = "0.2.5"
+
+[[example]]
+name = "acme-dns"
